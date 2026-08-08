@@ -1,65 +1,40 @@
 import asyncio
 import json
-import threading
-import queue
 import serial
 import websockets
 
-SERIAL_PORT = "/dev/tty.usbmodem1101"  # update this if your port name changes
-SERIAL_BAUD = 115200
+# Update this to match your Pico's port
+# Mac/Linux: something like '/dev/tty.usbmodem1101'
+# Windows: something like 'COM5'
+SERIAL_PORT = '/dev/tty.usbmodem1101'
+BAUD_RATE = 9600
 
-message_queue = queue.Queue()
 connected_clients = set()
 
-
-def serial_reader(port_name):
-    ser = serial.Serial(port_name, SERIAL_BAUD, timeout=1)
-    print(f"Listening on {port_name}")
-    while True:
-        try:
-            line = ser.readline().decode("utf-8").strip()
-            if line:
-                print(f"Received: {line}")
-                message_queue.put(line)
-        except Exception as e:
-            print("Serial read error:", e)
-
-
-async def register(websocket):
+async def handle_client(websocket):
     connected_clients.add(websocket)
-    print("Client connected:", websocket.remote_address)
     try:
-        async for _ in websocket:
-            pass  # we don't need to receive anything from the client
+        await websocket.wait_closed()
     finally:
-        connected_clients.discard(websocket)
-        print("Client disconnected")
+        connected_clients.remove(websocket)
 
+async def broadcast(message):
+    if connected_clients:
+        await asyncio.gather(*[ws.send(message) for ws in connected_clients])
 
-async def broadcast(data: dict):
-    if not connected_clients:
-        return
-    message = json.dumps(data)
-    await asyncio.gather(
-        *(ws.send(message) for ws in connected_clients),
-        return_exceptions=True
-    )
-
-
-async def queue_watcher():
+async def read_serial():
+    ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
     loop = asyncio.get_running_loop()
     while True:
-        line = await loop.run_in_executor(None, message_queue.get)
-        await broadcast({"pressed": line == "PRESSED"})
-
+        line = await loop.run_in_executor(None, ser.readline)
+        line = line.decode('utf-8').strip()
+        if ':' in line:
+            index, pressed = line.split(':')
+            await broadcast(json.dumps({'index': int(index), 'pressed': pressed == '1'}))
 
 async def main():
-    threading.Thread(target=serial_reader, args=(SERIAL_PORT,), daemon=True).start()
+    async with websockets.serve(handle_client, 'localhost', 8080):
+        print('Relay running on ws://localhost:8080')
+        await read_serial()
 
-    async with websockets.serve(register, "localhost", 8765):
-        print("WebSocket server running on ws://localhost:8765")
-        await queue_watcher()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
