@@ -60,8 +60,18 @@ async def read_serial():
 
 
 async def main():
-    async with websockets.serve(handle_client, 'localhost', 8080):
-        print('Relay running on ws://localhost:8080')
+    # host='0.0.0.0' -> accept connections from other devices on the LAN,
+    # not just this machine (a 'localhost' bind is invisible to anyone
+    # else on the network, even with the right IP typed in).
+    #
+    # ping_interval=None -> disable the library's automatic keepalive
+    # ping/pong. By default it pings every 20s and force-closes the
+    # connection if a pong doesn't come back in time -- across a real
+    # network (vs. same-machine loopback) that round trip is exactly the
+    # kind of thing that can slip past the deadline, which is why things
+    # were dying almost exactly 20 seconds in.
+    async with websockets.serve(handle_client, '0.0.0.0', 8080, ping_interval=None):
+        print('Relay running on ws://0.0.0.0:8080')
         await read_serial()
 
 asyncio.run(main())
